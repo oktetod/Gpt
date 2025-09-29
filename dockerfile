@@ -17,7 +17,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Salin file bot ke dalam container
-COPY bot.py .
+COPY . .
 
 # Health check untuk memverifikasi bot berhasil login (session file ada)
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \

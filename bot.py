@@ -10,9 +10,9 @@ from telethon import TelegramClient, events, Button
 import httpx
 
 # ================== KONFIGURASI ==================
-API_ID = os.getenv('10446785')
-API_HASH = os.getenv('4261b62d60200eb99a38dcd8b71c8634')
-BOT_TOKEN = os.getenv('8493708418:AAEjvF837afIBDs4OZSvuPFG3F6O6P1_D7U')
+API_ID = os.getenv('ID')
+API_HASH = os.getenv('HASH')
+BOT_TOKEN = os.getenv('BOT')
 DATABASE_URL = "postgresql://postgres.kzmeyjdceukikzazbjjy:gilpad008@aws-1-ap-southeast-1.pooler.supabase.com:6543/postgres"
 
 # Channels dan Groups wajib

@@ -49,10 +49,16 @@ class Database:
     
     async def connect(self):
         if not self.pool:
-            self.pool = await asyncpg.create_pool(self.url, min_size=5, max_size=20, command_timeout=60)
+            self.pool = await asyncpg.create_pool(
+                self.url,
+                min_size=5,
+                max_size=20,
+                command_timeout=60,
+                statement_cache_size=0  # <-- TAMBAHKAN BARIS INI
+            )
             await self.init_tables()
             print("Koneksi database berhasil dibuat.")
-    
+            
     async def init_tables(self):
         async with self.pool.acquire() as conn:
             await conn.execute('''

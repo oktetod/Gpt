@@ -165,25 +165,25 @@ class AiEngine:
         return {'type': 'chat', 'model': 'gpt-oss'}
 
     async def chat_with_cerebras(self, messages: List[Dict]) -> str:
-        if not self.cerebras_client:
-            return "❌ Error: Klien Cerebras tidak terkonfigurasi. Pastikan CEREBRAS_API_KEY sudah benar."
-        
-        # Mengumpulkan stream menjadi satu respons
-        full_response = ""
-        stream = self.cerebras_client.chat.completions.create(
-            messages=messages,
-            model="gpt-oss-120b",
-            stream=True,
-            max_completion_tokens=4096, # Disesuaikan agar tidak terlalu panjang
-            temperature=0.7,
-            top_p=1,
-            reasoning_effort="medium"
-        )
-        for chunk in stream:
-            content = chunk.choices[0].delta.content
-            if content:
-                full_response += content
-        return full_response
+    if not self.cerebras_client:
+        return "❌ Error: Klien Cerebras tidak terkonfigurasi. Pastikan CEREBRAS_API_KEY sudah benar."
+
+    full_response = ""
+    stream = self.cerebras_client.chat.completions.create(
+        messages=messages,
+        model="gpt-oss-120b",
+        stream=True,
+        # DIUBAH DARI max_completion_tokens
+        max_tokens=4096, 
+        temperature=0.7,
+        top_p=1,
+        reasoning_effort="medium"
+    )
+    for chunk in stream:
+        content = chunk.choices[0].delta.content
+        if content:
+            full_response += content
+    return full_response
 
     async def chat_with_pollinations(self, messages: List[Dict], model: str) -> str:
         model_name = TEXT_MODELS.get(model, "mistral") # Default ke mistral jika tidak ditemukan

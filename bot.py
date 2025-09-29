@@ -1,5 +1,3 @@
-# /proyek_bot/bot.py
-
 import os
 import asyncio
 import random
@@ -16,9 +14,7 @@ from cerebras.cloud.sdk import Cerebras
 API_ID = os.getenv('ID')
 API_HASH = os.getenv('HASH')
 BOT_TOKEN = os.getenv('BOT')
-DATABASE_URL = "postgresql://postgres.kzmeyjdceukikzazbjjy:gilpad008@aws-1-ap-southeast-1.pooler.supabase.com:6543/postgres"
-
-# Kunci API untuk Cerebras dari environment variable
+DATABASE_URL = os.getenv('DATABASE_URL', "postgresql://postgres.kzmeyjdceukikzazbjjy:gilpad008@aws-1-ap-southeast-1.pooler.supabase.com:6543/postgres")
 CEREBRAS_API_KEY = os.getenv("CEREBRAS_API_KEY")
 
 REQUIRED_CHANNELS = ['@durov69_1']
@@ -41,7 +37,7 @@ TEXT_MODELS = {
     "mistral": "mistral"
 }
 
-# ================== 2. KELAS DATABASE (Tidak ada perubahan) ==================
+# ================== 2. KELAS DATABASE ==================
 class Database:
     def __init__(self, url: str):
         self.url = url
@@ -54,11 +50,11 @@ class Database:
                 min_size=5,
                 max_size=20,
                 command_timeout=60,
-                statement_cache_size=0  # <-- TAMBAHKAN BARIS INI
+                statement_cache_size=0  # <-- Fix untuk error PGBouncer/Supabase
             )
             await self.init_tables()
             print("Koneksi database berhasil dibuat.")
-            
+    
     async def init_tables(self):
         async with self.pool.acquire() as conn:
             await conn.execute('''
@@ -106,7 +102,7 @@ class Database:
         async with self.pool.acquire() as conn:
             await conn.execute('DELETE FROM chat_history WHERE user_id = $1', user_id)
 
-# ================== 3. KELAS GATEKEEPER (Tidak ada perubahan) ==================
+# ================== 3. KELAS GATEKEEPER ==================
 class Gatekeeper:
     def __init__(self, client: TelegramClient):
         self.client = client
@@ -132,15 +128,13 @@ class Gatekeeper:
         message += "\n✅ Setelah bergabung, kirim /start lagi."
         return message, buttons
 
-# ================== 4. KELAS AI ENGINE (Diperbarui) ==================
+# ================== 4. KELAS AI ENGINE ==================
 class AiEngine:
     def __init__(self):
-        # Client untuk Pollinations (model spesialis & gambar)
         self.pollinations_client = httpx.AsyncClient(timeout=180.0)
         self.pollinations_text_url = "https://text.pollinations.ai"
         self.pollinations_image_url = "https://image.pollinations.ai"
 
-        # Client untuk Cerebras (model chat utama)
         if CEREBRAS_API_KEY:
             self.cerebras_client = Cerebras(api_key=CEREBRAS_API_KEY)
             print("Klien Cerebras berhasil diinisialisasi.")
@@ -150,7 +144,6 @@ class AiEngine:
 
     async def detect_intent(self, message: str, has_photo: bool = False) -> Dict:
         message_lower = message.lower()
-        # Logika deteksi audio dihapus
         if any(w in message_lower for w in ['gambar', 'buatkan', 'buat', 'lukis', 'generate', 'create', 'image']) and not has_photo:
             model = 'flux'
             if any(w in message_lower for w in ['realistis', 'nyata', 'foto', 'realistic']): model = 'flux-realism'
@@ -161,32 +154,30 @@ class AiEngine:
         if any(w in message_lower for w in ['kode', 'coding', 'program', 'fungsi', 'skrip', 'debug']): return {'type': 'chat', 'model': 'qwen-coder'}
         if any(w in message_lower for w in ['analisa', 'analisis', 'pikirkan', 'jelaskan', 'mengapa']): return {'type': 'chat', 'model': 'deepseek-r1'}
         if any(w in message_lower for w in ['cari', 'berita', 'terbaru', 'informasi', 'search']): return {'type': 'chat', 'model': 'gemini-search'}
-        # Default: Chat utama menggunakan Cerebras GPT-OSS
         return {'type': 'chat', 'model': 'gpt-oss'}
 
     async def chat_with_cerebras(self, messages: List[Dict]) -> str:
-    if not self.cerebras_client:
-        return "❌ Error: Klien Cerebras tidak terkonfigurasi. Pastikan CEREBRAS_API_KEY sudah benar."
-
-    full_response = ""
-    stream = self.cerebras_client.chat.completions.create(
-        messages=messages,
-        model="gpt-oss-120b",
-        stream=True,
-        # DIUBAH DARI max_completion_tokens
-        max_tokens=4096, 
-        temperature=0.7,
-        top_p=1,
-        reasoning_effort="medium"
-    )
-    for chunk in stream:
-        content = chunk.choices[0].delta.content
-        if content:
-            full_response += content
-    return full_response
+        if not self.cerebras_client:
+            return "❌ Error: Klien Cerebras tidak terkonfigurasi. Pastikan CEREBRAS_API_KEY sudah benar."
+        
+        full_response = ""
+        stream = self.cerebras_client.chat.completions.create(
+            messages=messages,
+            model="gpt-oss-120b",
+            stream=True,
+            max_tokens=4096,  # <-- Fix dari max_completion_tokens
+            temperature=0.7,
+            top_p=1,
+            reasoning_effort="medium"
+        )
+        for chunk in stream:
+            content = chunk.choices[0].delta.content
+            if content:
+                full_response += content
+        return full_response
 
     async def chat_with_pollinations(self, messages: List[Dict], model: str) -> str:
-        model_name = TEXT_MODELS.get(model, "mistral") # Default ke mistral jika tidak ditemukan
+        model_name = TEXT_MODELS.get(model, "mistral")
         response = await self.pollinations_client.post(f"{self.pollinations_text_url}/openai", json={"model": model_name, "messages": messages, "max_tokens": 4096})
         response.raise_for_status()
         data = response.json()
@@ -197,7 +188,6 @@ class AiEngine:
         return f"{self.pollinations_image_url}/prompt/{quote(prompt)}?model={model}&width=1024&height=1024&seed={seed}&nologo=true"
 
     async def enhance_prompt(self, prompt: str) -> str:
-        # Gunakan model Mistral yang gratis untuk enhance prompt
         messages = [{"role": "user", "content": f"Enhance this image prompt to be artistic and descriptive (max 50 words, in English): {prompt}"}]
         enhanced = await self.chat_with_pollinations(messages, "mistral")
         return enhanced.strip().replace('"', '')
@@ -205,7 +195,7 @@ class AiEngine:
     async def close(self):
         await self.pollinations_client.aclose()
 
-# ================== 5. KELAS UTAMA BOT (Diperbarui) ==================
+# ================== 5. KELAS UTAMA BOT ==================
 class SmartAIBot:
     def __init__(self):
         self.client = TelegramClient('bot_session', API_ID, API_HASH)
@@ -216,16 +206,15 @@ class SmartAIBot:
 
     async def send_error_log(self, event, error, function_name, status_msg=None):
         self.last_error_log = traceback.format_exc()
-        # ... (sisa fungsi tidak berubah)
         error_type = type(error).__name__
         error_message = str(error)
         log_message = (
             f"🐞 **DEBUG LOG ERROR** 🐞\n\n"
-            f"Fungsi: `{function_name}`\n"
-            f"Jenis: `{error_type}`\n"
-            f"Pesan: `{error_message}`"
+            f"**Fungsi:** `{function_name}`\n"
+            f"**Jenis:** `{error_type}`\n"
+            f"**Pesan:** `{error_message}`"
         )
-        print(f"ERROR in {function_name}: {self.last_error_log}")
+        print(f"ERROR in {function_name}:\n{self.last_error_log}")
         try:
             if status_msg: await status_msg.edit(log_message)
             else: await event.respond(log_message)
@@ -241,7 +230,6 @@ class SmartAIBot:
         await self.client.run_until_disconnected()
 
     async def upload_to_telegraph(self, image_bytes: bytes) -> Optional[str]:
-        # ... (fungsi tidak berubah)
         async with httpx.AsyncClient() as client:
             response = await client.post('https://telegra.ph/upload', files={'file': ('image.jpg', image_bytes, 'image/jpeg')})
         response.raise_for_status()
@@ -249,11 +237,7 @@ class SmartAIBot:
             return f"https://telegra.ph{data[0]['src']}"
         return None
 
-    # --- HANDLER (Fungsi Audio Dihapus) ---
-    # Fungsi handle_audio DIHAPUS
-
     async def handle_image_generation(self, event, intent):
-        # ... (fungsi tidak berubah)
         status_msg = await event.respond("🎨 Menyiapkan kanvas...")
         try:
             prompt, model = intent['prompt'], intent['model']
@@ -280,7 +264,6 @@ class SmartAIBot:
             history = await self.db.get_history(user_id)
             messages = [{"role": m['role'], "content": f"[Gambar: {m['image_url']}]\n{m['content']}" if m.get('image_url') else m['content']} for m in history]
             
-            # Logika baru untuk memilih antara Cerebras dan Pollinations
             if model == 'gpt-oss':
                 response = await self.ai.chat_with_cerebras(messages)
             else:
@@ -295,33 +278,21 @@ class SmartAIBot:
     def register_handlers(self):
         @self.client.on(events.NewMessage(pattern='/start'))
         async def start_handler(event):
-            # ... (Teks disesuaikan, fitur audio dihapus)
-            user = await event.get_sender()
-            await self.db.get_or_create_user(user.id, user.username, user.first_name)
-            if not await self.check_verification(event): return
-            await event.respond(
-                f"🤖 **Bot AI Cerdas Aktif**\n\nHalo **{user.first_name}**! Saya siap membantu Anda.\n\n"
-                "**🎯 Kemampuan Utama:**\n"
-                "🧠 Chat Cerdas (GPT-OSS)\n🎨 Membuat Gambar\n"
-                "👁️ Menganalisis Foto\n💻 Bantuan Koding\n\n"
-                "Kirim pesan atau gambar untuk memulai. Gunakan `/help` untuk panduan.",
-                parse_mode='markdown'
-            )
+            try:
+                user = await event.get_sender()
+                await self.db.get_or_create_user(user.id, user.username, user.first_name)
+                if not await self.check_verification(event): return
+                await event.respond(
+                    f"🤖 **Bot AI Cerdas Aktif**\n\nHalo **{user.first_name}**! Saya siap membantu Anda.\n\n"
+                    "**🎯 Kemampuan Utama:**\n"
+                    "🧠 Chat Cerdas (GPT-OSS)\n🎨 Membuat Gambar\n"
+                    "👁️ Menganalisis Foto\n💻 Bantuan Koding\n\n"
+                    "Kirim pesan atau gambar untuk memulai. Gunakan `/help` untuk panduan.",
+                    parse_mode='markdown'
+                )
+            except Exception as e:
+                await self.send_error_log(event, e, "start_handler")
 
-        @self.client.on(events.NewMessage(pattern='/help'))
-        async def help_handler(event):
-            # ... (Teks disesuaikan, fitur audio dihapus)
-            await event.respond(
-                "📖 **Panduan Lengkap Bot**\n\n"
-                "**🧠 Chat Cerdas:**\nCukup kirim pesan apa saja untuk berbicara dengan model GPT-OSS.\n\n"
-                "**🎨 Gambar:**\n`buatkan gambar pemandangan senja`\n\n"
-                "**👁️ Foto:**\nKirim foto untuk dianalisis, atau kirim dengan perintah: `ubah jadi kartun`\n\n"
-                "**💻 Koding & Info:**\n`buatkan kode python ...` atau `cari berita terbaru ...`\n"
-                "Bot akan otomatis mendeteksi keinginan Anda.",
-                parse_mode='markdown'
-            )
-        
-        # ... (handler /clear tidak berubah)
         @self.client.on(events.NewMessage(pattern='/clear'))
         async def clear_handler(event):
             try:
@@ -331,9 +302,20 @@ class SmartAIBot:
             except Exception as e:
                 await self.send_error_log(event, e, "clear_handler")
 
+        @self.client.on(events.NewMessage(pattern='/help'))
+        async def help_handler(event):
+            await event.respond(
+                "📖 **Panduan Lengkap Bot**\n\n"
+                "**🧠 Chat Cerdas:**\nCukup kirim pesan apa saja untuk berbicara dengan model GPT-OSS.\n\n"
+                "**🎨 Gambar:**\n`buatkan gambar pemandangan senja`\n\n"
+                "**👁️ Foto:**\nKirim foto untuk dianalisis, atau kirim dengan perintah: `ubah jadi kartun`\n\n"
+                "**💻 Koding & Info:**\n`buatkan kode python ...` atau `cari berita terbaru ...`\n"
+                "Bot akan otomatis mendeteksi keinginan Anda.",
+                parse_mode='markdown'
+            )
+
         @self.client.on(events.NewMessage(incoming=True, func=lambda e: not e.text.startswith('/')))
         async def message_handler(event):
-            # ... (Logika audio dihapus dari pemanggilan)
             status_msg = None
             try:
                 if not await self.check_verification(event): return
@@ -354,7 +336,6 @@ class SmartAIBot:
             except Exception as e:
                 await self.send_error_log(event, e, "message_handler", status_msg)
     
-    # ... (fungsi check_verification tidak berubah)
     async def check_verification(self, event) -> bool:
         if await self.db.is_verified(event.sender_id): return True
         is_member, not_joined = await self.gatekeeper.check_membership(event.sender_id)
@@ -365,7 +346,7 @@ class SmartAIBot:
         await self.db.set_verified(event.sender_id, True)
         return True
 
-# ================== 6. FUNGSI UTAMA (Tidak ada perubahan) ==================
+# ================== 6. FUNGSI UTAMA ==================
 async def main():
     bot = SmartAIBot()
     try:

@@ -10,14 +10,16 @@ ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
-# Salin file requirements terlebih dahulu untuk caching layer
-COPY requirements.txt .
-
-# Install dependencies dari requirements.txt
-RUN pip install --no-cache-dir -r requirements.txt
+# Install dependencies (Cerebras SDK ditambahkan)
+RUN pip install --no-cache-dir \
+    telethon==1.36.0 \
+    asyncpg==0.29.0 \
+    httpx==0.27.0 \
+    cryptg==0.4.0 \
+    cerebras-cloud-sdk==1.2.0
 
 # Salin file bot ke dalam container
-COPY . .
+COPY bot.py .
 
 # Health check untuk memverifikasi bot berhasil login (session file ada)
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \

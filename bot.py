@@ -167,8 +167,8 @@ class AiEngine:
             stream=True,
             max_tokens=4096,  # <-- Fix dari max_completion_tokens
             temperature=0.7,
-            top_p=1,
-            reasoning_effort="medium"
+            top_p=0.8
+            
         )
         for chunk in stream:
             content = chunk.choices[0].delta.content

@@ -3,12 +3,12 @@
 import os
 import asyncio
 import random
+import traceback
 from typing import List, Dict, Optional
 from urllib.parse import quote
 import asyncpg
 from telethon import TelegramClient, events, Button
 from telethon.errors.rpcerrorlist import UserNotParticipantError
-from telethon.tl.types import DocumentAttributeAudio
 import httpx
 
 # ================== 1. KONFIGURASI ==================
@@ -145,13 +145,12 @@ class AiEngine:
         return {'type': 'chat', 'model': 'gpt-5'}
 
     async def chat(self, messages: List[Dict], model: str = "gpt-5") -> str:
-        try:
-            model_name = TEXT_MODELS.get(model, TEXT_MODELS['gpt-5'])
-            response = await self.client.post(f"{self.base_url}/openai", json={"model": model_name, "messages": messages, "max_tokens": 4096})
-            response.raise_for_status()
-            data = response.json()
-            return data.get("choices", [{}])[0].get("message", {}).get("content", "Maaf, terjadi kesalahan.")
-        except Exception as e: return f"❌ Error saat menghubungi AI: {str(e)}"
+        # Fungsi ini tidak menggunakan try-except agar error bisa ditangkap di level handler
+        model_name = TEXT_MODELS.get(model, TEXT_MODELS['gpt-5'])
+        response = await self.client.post(f"{self.base_url}/openai", json={"model": model_name, "messages": messages, "max_tokens": 4096})
+        response.raise_for_status() # Akan memunculkan error jika status code bukan 2xx
+        data = response.json()
+        return data.get("choices", [{}])[0].get("message", {}).get("content", "Maaf, terjadi kesalahan.")
 
     def generate_image_url(self, prompt: str, model: str = "flux") -> str:
         seed = random.randint(1, 1000000)
@@ -164,7 +163,6 @@ class AiEngine:
         return f"{self.base_url}/{quote(text)}?model=openai-audio&voice={voice}"
 
     async def enhance_prompt(self, prompt: str) -> str:
-        if len(prompt.split()) > 25: return prompt
         messages = [{"role": "user", "content": f"Enhance this image prompt to be artistic and descriptive (max 50 words, in English): {prompt}"}]
         enhanced = await self.chat(messages, "gpt-5-mini")
         return enhanced.strip().replace('"', '')
@@ -179,6 +177,31 @@ class SmartAIBot:
         self.ai = AiEngine()
         self.gatekeeper = Gatekeeper(self.client)
 
+    async def send_error_log(self, event, error, function_name, status_msg=None):
+        """Fungsi terpusat untuk mengirim log error ke chat."""
+        error_type = type(error).__name__
+        error_message = str(error)
+        traceback_info = traceback.format_exc()
+
+        log_message = (
+            f"🐞 **DEBUG LOG ERROR** 🐞\n\n"
+            f"Sebuah error terdeteksi saat menjalankan fungsi `{function_name}`.\n\n"
+            f"**Jenis Error:**\n`{error_type}`\n\n"
+            f"**Pesan Error:**\n`{error_message}`\n\n"
+            f"**Traceback:**\n`{traceback_info}`"
+        )
+        
+        # Cetak juga ke terminal untuk backup
+        print(f"ERROR in {function_name}: {error_message}")
+        
+        try:
+            if status_msg:
+                await status_msg.edit(log_message)
+            else:
+                await event.respond(log_message)
+        except Exception as e:
+            print(f"Gagal mengirim log error ke chat: {e}")
+
     async def start(self):
         await self.client.start(bot_token=BOT_TOKEN)
         await self.db.connect()
@@ -189,22 +212,19 @@ class SmartAIBot:
         await self.client.run_until_disconnected()
 
     async def upload_to_telegraph(self, image_bytes: bytes) -> Optional[str]:
-        try:
-            files = {'file': ('image.jpg', image_bytes, 'image/jpeg')}
-            async with httpx.AsyncClient() as client:
-                response = await client.post('https://telegra.ph/upload', files=files)
-            if response.status_code == 200 and (data := response.json()):
-                return f"https://telegra.ph{data[0]['src']}"
-        except Exception as e:
-            print(f"Error unggah ke Telegraph: {e}")
+        async with httpx.AsyncClient() as client:
+            response = await client.post('https://telegra.ph/upload', files={'file': ('image.jpg', image_bytes, 'image/jpeg')})
+        response.raise_for_status()
+        if (data := response.json()):
+            return f"https://telegra.ph{data[0]['src']}"
         return None
 
-    # --- HANDLER DENGAN LOGIKA EDIT PESAN ---
+    # --- HANDLER DENGAN LOGIKA ERROR DEBUG ---
     async def handle_audio(self, event, intent):
-        status_msg = await event.respond("🎙️ Mempersiapkan studio rekaman...")
+        status_msg = await event.respond("🎙️ Menyiapkan studio...")
         try:
             text, voice = intent['text'], intent['voice']
-            await status_msg.edit(f"🎙️ Sedang merekam suara dengan voice **{voice}**...")
+            await status_msg.edit(f"🎙️ Merekam suara dengan voice **{voice}**...")
             audio_url = self.ai.generate_audio_url(text, voice)
             async with httpx.AsyncClient() as client:
                 response = await client.get(audio_url, timeout=120.0)
@@ -212,42 +232,45 @@ class SmartAIBot:
             await self.client.send_file(event.chat_id, file=response.content, voice_note=True)
             await status_msg.delete()
         except Exception as e:
-            await status_msg.edit(f"❌ Gagal membuat audio: {str(e)}")
+            await self.send_error_log(event, e, "handle_audio", status_msg)
 
     async def handle_image_generation(self, event, intent):
         status_msg = await event.respond("🎨 Menyiapkan kanvas...")
         try:
             prompt, model = intent['prompt'], intent['model']
-            await status_msg.edit("💡 Memperkaya imajinasi (prompt enhancement)...")
-            enhanced_prompt = await self.ai.enhance_prompt(prompt)
-            await status_msg.edit(f"🖌️ Sedang melukis gambar dengan model **{model}**...")
+            enhanced_prompt = prompt
+            if len(prompt.split()) < 8:
+                await status_msg.edit("💡 Imajinasi sedang diperkaya...")
+                enhanced_prompt = await self.ai.enhance_prompt(prompt)
+            await status_msg.edit(f"🖌️ Melukis dengan model **{model}**...")
             image_url = self.ai.generate_image_url(enhanced_prompt, model)
-            await event.respond(file=image_url, message=f"🎨 **Karya Seni Selesai**\n\n**Imajinasi:** `{enhanced_prompt}`")
+            await event.respond(file=image_url, message=f"🎨 **Karya Selesai**\n\n**Imajinasi:** `{enhanced_prompt}`")
             await status_msg.delete()
             await self.db.add_message(event.sender_id, 'user', f"Buat gambar: {prompt}")
             await self.db.add_message(event.sender_id, 'assistant', f"Gambar dibuat", image_url)
         except Exception as e:
-            await status_msg.edit(f"❌ Gagal melukis: {str(e)}")
+            await self.send_error_log(event, e, "handle_image_generation", status_msg)
 
     async def handle_image_transform(self, event, intent, image_url):
-        status_msg = await event.respond("✨ Mempersiapkan sihir transformasi...")
+        status_msg = await event.respond("✨ Menyiapkan sihir...")
         try:
             prompt = intent['prompt'] or "tingkatkan kualitas gambar ini"
-            await status_msg.edit(f"✨ Merapal mantra transformasi pada gambar...")
+            await status_msg.edit(f"✨ Merapal mantra pada gambar...")
             transform_url = self.ai.transform_image_url(prompt, image_url)
             await event.respond(file=transform_url, message=f"✨ **Transformasi Berhasil**\n\n**Mantra:** `{prompt}`")
             await status_msg.delete()
             await self.db.add_message(event.sender_id, 'user', f"Transformasi: {prompt}", image_url)
             await self.db.add_message(event.sender_id, 'assistant', "Hasil transformasi", transform_url)
         except Exception as e:
-            await status_msg.edit(f"❌ Gagal transformasi: {str(e)}")
+            await self.send_error_log(event, e, "handle_image_transform", status_msg)
 
     async def handle_chat(self, event, intent, message_text, image_url=None):
-        user_id = event.sender_id
-        model = intent['model']
-        emoji_map = {'gpt-5':'🤖', 'qwen-coder':'💻', 'deepseek-r1':'🧠', 'gemini-search':'🔍', 'gemini':'👁️'}
-        status_msg = await event.respond(f"{emoji_map.get(model, '🤖')} Sedang berpikir...")
+        status_msg = None
         try:
+            user_id = event.sender_id
+            model = intent['model']
+            emoji_map = {'gpt-5':'🤖', 'qwen-coder':'💻', 'deepseek-r1':'🧠', 'gemini-search':'🔍', 'gemini':'👁️'}
+            status_msg = await event.respond(f"{emoji_map.get(model, '🤖')} Sedang berpikir...")
             content = message_text or "Jelaskan gambar ini secara detail."
             await self.db.add_message(user_id, 'user', content, image_url)
             history = await self.db.get_history(user_id)
@@ -258,72 +281,75 @@ class SmartAIBot:
             model_name = model.replace('-', ' ').upper()
             await status_msg.edit(f"{emoji_map.get(model, '🤖')} **{model_name}**\n\n{response}", parse_mode='markdown')
         except Exception as e:
-            await status_msg.edit(f"❌ Terjadi kesalahan saat chat: {str(e)}")
+            await self.send_error_log(event, e, "handle_chat", status_msg)
 
     # --- REGISTRASI EVENT ---
     def register_handlers(self):
         @self.client.on(events.NewMessage(pattern='/start'))
         async def start_handler(event):
-            user = await event.get_sender()
-            await self.db.get_or_create_user(user.id, user.username, user.first_name)
-            if not await self.check_verification(event): return
-            await event.respond(
-                f"🤖 **Bot AI Cerdas Aktif**\n\nHalo **{user.first_name}**! Saya siap membantu Anda.\n\n"
-                "**🎯 Kemampuan Utama:**\n"
-                "💬 Chat Cerdas (GPT-5)\n🎨 Membuat Gambar\n✏️ Mengedit Gambar\n"
-                "👁️ Menganalisis Foto\n🎙️ Teks ke Suara\n💻 Bantuan Koding\n\n"
-                "Kirim pesan atau gambar untuk memulai. Gunakan `/help` untuk panduan.",
-                parse_mode='markdown'
-            )
-
+            try:
+                user = await event.get_sender()
+                await self.db.get_or_create_user(user.id, user.username, user.first_name)
+                if not await self.check_verification(event): return
+                await event.respond(
+                    f"🤖 **Bot AI Cerdas Aktif**\n\nHalo **{user.first_name}**! Saya siap membantu Anda.\n\n"
+                    "Kirim pesan atau gambar untuk memulai. Gunakan `/help` untuk panduan.",
+                    parse_mode='markdown'
+                )
+            except Exception as e:
+                await self.send_error_log(event, e, "start_handler")
+        
         @self.client.on(events.NewMessage(pattern='/clear'))
         async def clear_handler(event):
-            if not await self.check_verification(event): return
-            await self.db.clear_history(event.sender_id)
-            await event.respond("🗑️ Riwayat percakapan Anda telah dihapus.")
-        
+            try:
+                if not await self.check_verification(event): return
+                await self.db.clear_history(event.sender_id)
+                await event.respond("🗑️ Riwayat percakapan Anda telah dihapus.")
+            except Exception as e:
+                await self.send_error_log(event, e, "clear_handler")
+
         @self.client.on(events.NewMessage(pattern='/help'))
         async def help_handler(event):
-            if not await self.check_verification(event): return
             await event.respond(
                 "📖 **Panduan Lengkap Bot**\n\n"
-                "**🎨 Gambar:**\n`buatkan gambar pemandangan senja`\n`lukis gadis anime rambut biru`\n\n"
+                "**🎨 Gambar:**\n`buatkan gambar pemandangan senja`\n\n"
                 "**👁️ Foto:**\nKirim foto untuk dianalisis, atau kirim dengan perintah: `ubah jadi kartun`\n\n"
                 "**🎙️ Suara:**\n`katakan halo dengan suara nova`\n(Suara: `alloy, echo, fable, onyx, nova, shimmer`)\n\n"
-                "**💻 Koding:**\n`buatkan kode python untuk ...`\n`debug kode ini ...`\n\n"
-                "**🔍 Info:**\n`cari berita terbaru tentang AI`\n"
+                "**💻 Koding & Info:**\n`buatkan kode python ...` atau `cari berita terbaru ...`\n"
                 "Bot akan otomatis mendeteksi keinginan Anda.",
                 parse_mode='markdown'
             )
 
         @self.client.on(events.NewMessage(incoming=True, func=lambda e: not e.text.startswith('/')))
         async def message_handler(event):
-            if not await self.check_verification(event): return
-            
-            message_text = event.message.text or ""
-            has_photo = bool(event.message.photo)
-            
-            image_url = None
-            if has_photo:
-                status_msg = await event.respond("📸 Foto diterima, sedang diunggah...")
-                try:
+            status_msg = None
+            try:
+                if not await self.check_verification(event): return
+                
+                message_text = event.message.text or ""
+                has_photo = bool(event.message.photo)
+                
+                image_url = None
+                if has_photo:
+                    status_msg = await event.respond("📸 Foto diterima, mengunggah...")
                     photo_bytes = await event.message.download_media(bytes)
                     image_url = await self.upload_to_telegraph(photo_bytes)
                     if not image_url:
-                        await status_msg.edit("❌ Gagal mengunggah foto. Coba lagi.")
+                        await status_msg.edit("❌ Gagal mengunggah foto. URL tidak didapatkan.")
                         return
                     await status_msg.delete()
-                except Exception as e:
-                    await status_msg.edit(f"❌ Error memproses foto: {e}")
-                    return
+                    status_msg = None # Reset status message
 
-            intent = await self.ai.detect_intent(message_text, has_photo)
+                intent = await self.ai.detect_intent(message_text, has_photo)
+                
+                if intent['type'] == 'audio': await self.handle_audio(event, intent)
+                elif intent['type'] == 'image': await self.handle_image_generation(event, intent)
+                elif intent['type'] == 'image_transform': await self.handle_image_transform(event, intent, image_url)
+                elif intent['type'] == 'chat': await self.handle_chat(event, intent, message_text, image_url)
             
-            if intent['type'] == 'audio': await self.handle_audio(event, intent)
-            elif intent['type'] == 'image': await self.handle_image_generation(event, intent)
-            elif intent['type'] == 'image_transform': await self.handle_image_transform(event, intent, image_url)
-            elif intent['type'] == 'chat': await self.handle_chat(event, intent, message_text, image_url)
-            
+            except Exception as e:
+                await self.send_error_log(event, e, "message_handler", status_msg)
+
     async def check_verification(self, event) -> bool:
         if await self.db.is_verified(event.sender_id): return True
         is_member, not_joined = await self.gatekeeper.check_membership(event.sender_id)
@@ -340,10 +366,11 @@ async def main():
     try:
         await bot.start()
     except Exception as e:
-        print(f"❌ Bot berhenti karena error fatal: {e}")
+        print(f"❌ Bot berhenti karena error fatal di luar loop: {e}")
+        traceback.print_exc()
     finally:
-        await bot.ai.close()
-        await bot.client.disconnect()
+        if bot.ai: await bot.ai.close()
+        if bot.client and bot.client.is_connected(): await bot.client.disconnect()
         print("🛑 Bot telah berhenti.")
 
 if __name__ == '__main__':

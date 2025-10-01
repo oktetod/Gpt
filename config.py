@@ -3,10 +3,10 @@
 import os
 
 # ================== KONFIGURASI BOT ==================
-API_ID = os.getenv('ID')
-API_HASH = os.getenv('HASH')
-BOT_TOKEN = os.getenv('BOT')
-DATABASE_URL = "postgresql://postgres.kzmeyjdceukikzazbjjy:gilpad008@aws-1-ap-southeast-1.pooler.supabase.com:6543/postgres"
+API_ID = os.getenv('TELEGRAM_API_ID')
+API_HASH = os.getenv('TELEGRAM_API_HASH')
+BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
+DATABASE_URL = os.getenv('DATABASE_URL', "postgresql://postgres.kzmeyjdceukikzazbjjy:gilpad008@aws-1-ap-southeast-1.pooler.supabase.com:6543/postgres")
 
 # Channel dan Grup yang wajib diikuti pengguna
 REQUIRED_CHANNELS = ['@durov69_1']

@@ -1,5 +1,3 @@
-# /proyek_bot/ai_engine.py
-
 import httpx
 import random
 from typing import List, Dict
@@ -111,7 +109,7 @@ class PollinationsAI:
         enhance_request = f"Tingkatkan dan detailkan prompt gambar ini agar lebih artistik dan deskriptif (maksimal 50 kata, dalam bahasa Inggris): {prompt}"
         messages = [{"role": "user", "content": enhance_request}]
         enhanced = await self.chat(messages, "gpt-5-mini")
-        return enhanced.strip().replace('"', '') # Hapus tanda kutip dari hasil
+        return enhanced.strip().replace('\"', '') # Hapus tanda kutip dari hasil
     
     async def close(self):
         """Menutup koneksi client httpx."""

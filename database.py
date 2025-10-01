@@ -1,5 +1,3 @@
-# /proyek_bot/database.py
-
 import asyncpg
 from typing import List, Dict
 from config import MAX_HISTORY

@@ -7,7 +7,6 @@ from urllib.parse import quote
 
 from telethon import TelegramClient, events, Button
 from telethon.errors import MessageTooLongError
-from telethon.tl.functions.messages import EditMessageRequest
 import httpx
 from cerebras.cloud.sdk import Cerebras
 
@@ -37,6 +36,11 @@ TEXT_MODELS = {
     "qwen-coder": "qwen-coder",
     "mistral": "mistral"
 }
+
+# Suara untuk TTS (Audio)
+AUDIO_VOICES = [
+    'alloy', 'echo', 'fable', 'onyx', 'nova', 'shimmer'
+]
 
 # Batas panjang pesan Telegram
 MAX_MESSAGE_LENGTH = 4096
@@ -146,6 +150,60 @@ class PollinationsAI:
         self.base_url = "https://text.pollinations.ai"
         self.image_url = "https://image.pollinations.ai"
 
+    async def detect_intent(self, message: str, has_photo: bool = False) -> Dict:
+        """Deteksi cerdas untuk memahami keinginan pengguna."""
+        message_lower = message.lower()
+        
+        # Permintaan Audio
+        if any(word in message_lower for word in ['suara', 'bicara', 'bilang', 'katakan', 'ngomong', 'speak', 'voice', 'audio', 'tts', 'say']):
+            voice = 'alloy' # Default
+            for v in AUDIO_VOICES:
+                if v in message_lower:
+                    voice = v
+                    break
+            return {'type': 'audio', 'voice': voice, 'text': message}
+        
+        # Permintaan Generasi Gambar
+        image_keywords = ['gambar', 'buatkan', 'buat', 'lukis', 'generate', 'create', 'make', 'draw', 'image']
+        if any(word in message_lower for word in image_keywords) and not has_photo:
+            model = 'flux' # Default
+            if any(word in message_lower for word in ['realistis', 'nyata', 'foto', 'realistic', 'photo', 'real']):
+                model = 'flux-realism'
+            elif any(word in message_lower for word in ['anime', 'kartun', 'manga', 'cartoon']):
+                model = 'flux-anime'
+            elif any(word in message_lower for word in ['3d', 'render', 'cgi']):
+                model = 'flux-3d'
+            elif any(word in message_lower for word in ['gelap', 'seram', 'dark', 'gothic', 'horror']):
+                model = 'any-dark'
+            elif any(word in message_lower for word in ['cepat', 'fast', 'quick']):
+                model = 'turbo'
+            
+            return {'type': 'image', 'model': model, 'prompt': message}
+        
+        # Permintaan Transformasi Gambar (jika pengguna mengirim foto)
+        if has_photo:
+            transform_keywords = ['ubah', 'edit', 'transformasi', 'ganti', 'konversi', 'jadikan', 'jadi', 'transform', 'change', 'convert', 'into', 'style']
+            if not message or not any(word in message_lower for word in transform_keywords):
+                # Jika tidak ada teks atau kata kunci, defaultnya adalah analisis gambar
+                return {'type': 'chat', 'model': 'gemini'}
+            
+            return {'type': 'image_transform', 'model': 'kontext', 'prompt': message}
+        
+        # Permintaan Coding/Pemrograman
+        if any(word in message_lower for word in ['kode', 'coding', 'program', 'fungsi', 'skrip', 'debug', 'bug', 'code', 'function', 'script']):
+            return {'type': 'chat', 'model': 'qwen-coder'}
+        
+        # Permintaan Penalaran/Analisis
+        if any(word in message_lower for word in ['analisa', 'analisis', 'reason', 'penalaran', 'logika', 'kesimpulan', 'inferensi']):
+            return {'type': 'chat', 'model': 'deepseek-r1'}
+        
+        # Permintaan Pencarian
+        if any(word in message_lower for word in ['cari', 'search', 'temukan', 'google', 'lookup']):
+            return {'type': 'chat', 'model': 'gemini-search'}
+        
+        # Default: gunakan model umum
+        return {'type': 'chat', 'model': 'gpt-oss'}
+
     async def generate_text(self, prompt: str, model: str = "gpt-oss") -> str:
         try:
             response = await self.client.post(
@@ -163,6 +221,13 @@ class PollinationsAI:
                 return f"❌ Error AI: {response.status_code}"
         except Exception as e:
             return f"❌ Gagal menghubungi AI: {str(e)}"
+
+    async def generate_image(self, prompt: str, model: str = "flux") -> str:
+        try:
+            url = f"{self.image_url}/p/{quote(prompt)}?model={model}&width=1024&height=1024&seed={random.randint(1, 10000)}"
+            return url  # Langsung kembalikan URL gambar
+        except Exception as e:
+            return f"❌ Gagal membuat gambar: {str(e)}"
 
 
 # Inisialisasi klien dan database
@@ -222,35 +287,65 @@ async def handle_chat(event):
             )
             return
 
+    # Deteksi niat pengguna
+    has_photo = event.photo is not None
+    intent = await ai_engine.detect_intent(event.message.message, has_photo)
+
     # Tampilkan "typing"
     async with client.action(event.chat_id, 'typing'):
         try:
             # Simulasi AI memproses (untuk UX)
             await asyncio.sleep(1)
 
-            # Ambil riwayat percakapan
-            history = await db.get_history(user_id)
-            context = "\n".join([f"{msg['role']}: {msg['content']}" for msg in history])
+            if intent['type'] == 'audio':
+                # Fitur audio/TTS
+                voice = intent['voice']
+                text = intent['text']
+                tts_url = f"https://api.streamelements.com/kappa/v2/speech?voice={voice}&text={quote(text)}"
+                await event.reply(f"🎧 Audio dari AI (suara: {voice}):", file=tts_url)
 
-            # Prompt gabungan
-            full_prompt = f"{context}\nuser: {event.message.message}\nassistant: "
+            elif intent['type'] == 'image':
+                # Generasi gambar
+                prompt = intent['prompt']
+                model = intent['model']
+                image_url = await ai_engine.generate_image(prompt, model)
+                await event.reply(f"🎨 Gambar dari AI (model: {model}):")
+                await event.respond(image_url)
+                # Simpan riwayat
+                await db.save_message(user_id, "user", event.message.message)
+                await db.save_message(user_id, "assistant", f"Gambar dihasilkan dengan model {model}", image_url)
 
-            # Kirim ke AI
-            response = await ai_engine.generate_text(full_prompt)
+            elif intent['type'] == 'image_transform':
+                # Transformasi gambar
+                # Fitur ini memerlukan integrasi tambahan
+                await event.reply("🖼️ Transformasi gambar sedang dalam pengembangan.")
 
-            # Simpan ke database
-            await db.save_message(user_id, "user", event.message.message)
-            await db.save_message(user_id, "assistant", response)
+            else:
+                # Mode chat biasa
+                # Ambil riwayat percakapan
+                history = await db.get_history(user_id)
+                context = "\n".join([f"{msg['role']}: {msg['content']}" for msg in history])
 
-            # Bagi pesan jika terlalu panjang
-            parts = await split_message(response)
+                # Prompt gabungan
+                full_prompt = f"{context}\nuser: {event.message.message}\nassistant: "
 
-            # Kirim bagian pertama sebagai reply
-            first_msg = await event.reply(f"🧠 AI: {parts[0]}")
+                # Kirim ke AI
+                model = intent['model']
+                response = await ai_engine.generate_text(full_prompt, model=model)
 
-            # Kirim sisa bagian sebagai pesan tambahan
-            for part in parts[1:]:
-                await event.respond(part)
+                # Simpan ke database
+                await db.save_message(user_id, "user", event.message.message)
+                await db.save_message(user_id, "assistant", response)
+
+                # Bagi pesan jika terlalu panjang
+                parts = await split_message(response)
+
+                # Kirim bagian pertama sebagai reply
+                first_msg = await event.reply(f"🧠 AI: {parts[0]}")
+
+                # Kirim sisa bagian sebagai pesan tambahan
+                for part in parts[1:]:
+                    await event.respond(part)
 
         except MessageTooLongError:
             # Backup plan: Pisah dan kirim
@@ -291,6 +386,7 @@ async def handle_verification(event):
 async def main():
     await db.connect()
     print("✅ Bot siap digunakan.")
+    await client.start(bot_token=BOT_TOKEN)
     await client.run_until_disconnected()
 
 if __name__ == '__main__':

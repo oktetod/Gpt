@@ -1,133 +1,65 @@
-import asyncpg
+import os
 from typing import List, Dict, Optional
-from config import MAX_HISTORY
 
+# ================== KONFIGURASI ENV ==================
+API_ID = int(os.getenv('TELEGRAM_API_ID'))
+API_HASH = os.getenv('TELEGRAM_API_HASH')
+BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
+DATABASE_URL = os.getenv('DATABASE_URL', "postgresql://postgres.kzmeyjdceukikzazbjjy:gilpad008@aws-1-ap-southeast-1.pooler.supabase.com:6543/postgres")
+CEREBRAS_API_KEY = os.getenv("CEREBRAS_API_KEY")
 
-class Database:
-    def __init__(self, url: str):
-        self.url = url
-        self.pool = None
+# ================== CHANNEL & GRUP WAJIB ==================
+REQUIRED_CHANNELS: List[str] = ['@durov69_1']
+REQUIRED_GROUPS: List[str] = ['@durov69_2']
 
-    async def connect(self):
-        """Membuat koneksi pool ke database."""
-        if not self.pool:
-            try:
-                self.pool = await asyncpg.create_pool(
-                    self.url,
-                    min_size=1,
-                    max_size=10,
-                    command_timeout=60
-                )
-                print("✅ Koneksi ke database berhasil.")
-            except Exception as e:
-                print(f"❌ Gagal menghubungkan ke database: {e}")
-                raise
+# ================== MODEL AI ==================
+TEXT_MODELS: Dict[str, str] = {
+    "gpt-oss": "Cerebras GPT-OSS 120B",
+    "gemini": "gemini",
+    "gemini-search": "gemini-search",
+    "deepseek": "deepseek",
+    "deepseek-r1": "deepseek-reasoning",
+    "qwen-coder": "qwen-coder",
+    "mistral": "mistral"
+}
 
-    async def close(self):
-        """Menutup koneksi ke database."""
-        if self.pool:
-            await self.pool.close()
-            self.pool = None
+# Daftar model teks yang didukung
+SUPPORTED_TEXT_MODELS: List[str] = list(TEXT_MODELS.keys())
 
-    async def get_or_create_user(self, user_id: int, username: str, first_name: str, last_name: str = None):
-        """Mendapatkan atau membuat pengguna baru di database."""
-        async with self.pool.acquire() as conn:
-            # Cek apakah pengguna sudah ada
-            query = '''
-                SELECT id, user_id, username, first_name, last_name, is_verified, created_at, updated_at
-                FROM users WHERE user_id = $1
-            '''
-            row = await conn.fetchrow(query, user_id)
-            
-            if row:
-                # Update data pengguna jika ada perubahan
-                await conn.execute(
-                    '''
-                    UPDATE users SET username = $2, first_name = $3, last_name = $4, updated_at = NOW()
-                    WHERE user_id = $1
-                    ''',
-                    user_id, username, first_name, last_name
-                )
-                return dict(row)
-            
-            # Jika tidak ada, buat pengguna baru
-            insert_query = '''
-                INSERT INTO users (user_id, username, first_name, last_name, is_verified)
-                VALUES ($1, $2, $3, $4, false)
-                RETURNING id, user_id, username, first_name, last_name, is_verified, created_at, updated_at
-            '''
-            new_user = await conn.fetchrow(
-                insert_query,
-                user_id,
-                username,
-                first_name,
-                last_name
-            )
-            return dict(new_user)
+# Daftar model gambar yang didukung
+image_models: List[str] = [
+    "dall-e-3",
+    "dall-e-2"
+]
 
-    async def update_user_verification(self, user_id: int, is_verified: bool):
-        """Memperbarui status verifikasi pengguna."""
-        async with self.pool.acquire() as conn:
-            await conn.execute(
-                "UPDATE users SET is_verified = $1, updated_at = NOW() WHERE user_id = $2",
-                is_verified, user_id
-            )
+# Daftar suara untuk TTS (audio)
+AUDIO_VOICES: List[str] = [
+    'alloy', 'echo', 'fable', 'onyx', 'nova', 'shimmer'
+]
 
-    async def is_verified(self, user_id: int) -> bool:
-        """Memeriksa apakah pengguna telah diverifikasi (bergabung dengan semua channel)."""
-        async with self.pool.acquire() as conn:
-            row = await conn.fetchrow(
-                "SELECT is_verified FROM users WHERE user_id = $1", user_id
-            )
-            if not row:
-                return False
-            return row['is_verified']
+# ================== BATASAN SISTEM ==================
+MAX_HISTORY: int = 20
+MAX_MESSAGE_LENGTH: int = 4096
+API_TIMEOUT: int = 30
+MAX_MESSAGES_PER_HOUR: int = 100
+CACHE_TTL: int = 3600
 
-    async def save_message(self, user_id: int, role: str, content: str, model: str = None):
-        """Menyimpan pesan ke riwayat percakapan pengguna."""
-        async with self.pool.acquire() as conn:
-            # Simpan pesan
-            await conn.execute(
-                '''
-                INSERT INTO messages (user_id, role, content, model, created_at)
-                VALUES ($1, $2, $3, $4, NOW())
-                ''',
-                user_id, role, content, model
-            )
+# ================== BOT & PESAN ==================
+COMMAND_PREFIXES: List[str] = ["/", "!", "?"]
+VALID_ROLES: List[str] = ["user", "assistant", "system"]
+BOT_API_URL: str = "https://api.telegram.org/bot"
 
-            # Cek jumlah riwayat pesan
-            count = await conn.fetchval(
-                "SELECT COUNT(*) FROM messages WHERE user_id = $1", user_id
-            )
-            
-            # Hapus yang tertua jika melebihi batas
-            if count > MAX_HISTORY:
-                to_delete = count - MAX_HISTORY
-                await conn.execute(
-                    '''
-                    DELETE FROM messages
-                    WHERE id IN (
-                        SELECT id FROM messages
-                        WHERE user_id = $1
-                        ORDER BY created_at ASC
-                        LIMIT $2
-                    )
-                    ''',
-                    user_id, to_delete
-                )
+# ================== KEAMANAN & ADMIN ==================
+DEBUG: bool = False
+ADMIN_IDS: List[int] = []
+OPENAI_API_KEY: Optional[str] = None
 
-    async def get_history(self, user_id: int) -> List[Dict]:
-        """Mendapatkan riwayat percakapan pengguna."""
-        async with self.pool.acquire() as conn:
-            rows = await conn.fetch(
-                "SELECT role, content, model, created_at FROM messages WHERE user_id = $1 ORDER BY created_at",
-                user_id
-            )
-            return [dict(row) for row in rows]
+default_model: str = "gpt-oss"
 
-    async def clear_history(self, user_id: int):
-        """Menghapus riwayat percakapan pengguna."""
-        async with self.pool.acquire() as conn:
-            await conn.execute(
-                "DELETE FROM messages WHERE user_id = $1", user_id
-            )
+# ================== PROVIDER AI ==================
+AI_PROVIDERS: Dict[str, str] = {
+    "openai": "https://api.openai.com/v1",
+    "pollinations": "https://text.pollinations.ai",
+    "google": "https://generativelanguage.googleapis.com/v1beta",
+    "cerebras": "https://api.cerebras.ai/v1"
+}

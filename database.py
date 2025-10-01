@@ -2,6 +2,7 @@ import asyncpg
 from typing import List, Dict, Optional
 from config import MAX_HISTORY
 
+
 class Database:
     def __init__(self, url: str):
         self.url = url
@@ -15,7 +16,8 @@ class Database:
                     self.url,
                     min_size=5,
                     max_size=20,
-                    command_timeout=60
+                    command_timeout=60,
+                    statement_cache_size=0  # Fix untuk kompatibilitas Supabase/PGBouncer
                 )
                 await self.init_tables()
                 print("Koneksi database berhasil dibuat.")
@@ -100,8 +102,8 @@ class Database:
                 user_id, role, content, image_url
             )
             
-            # Membatasi jumlah riwayat agar database tidak membengkak
-            # Hapus pesan yang melebihi batas sejarah (berdasarkan waktu)
+            # Batasi riwayat agar tidak membengkak
+            # Hapus pesan lama jika melebihi batas (berdasarkan urutan waktu)
             await conn.execute('''
                 DELETE FROM chat_history
                 WHERE id IN (
@@ -110,7 +112,7 @@ class Database:
                     ORDER BY created_at DESC
                     OFFSET $2
                 )
-            ''', user_id, MAX_HISTORY * 2) # *2 untuk user dan asisten
+            ''', user_id, MAX_HISTORY * 2) # *2 karena pasangan user-assistant
 
     async def get_history(self, user_id: int) -> List[Dict]:
         """Mengambil riwayat percakapan pengguna."""
@@ -119,7 +121,6 @@ class Database:
                 'SELECT role, content, image_url FROM chat_history WHERE user_id = $1 ORDER BY created_at ASC LIMIT $2',
                 user_id, MAX_HISTORY * 2
             )
-            # Mengembalikan dalam urutan yang benar (paling lama ke paling baru)
             return [dict(row) for row in rows]
     
     async def clear_history(self, user_id: int):

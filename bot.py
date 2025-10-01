@@ -1,5 +1,3 @@
-# 📄 bot.py (v2) — Full with MessageTooLong Fix
-
 import os
 import asyncio
 import random
@@ -109,6 +107,13 @@ class Database:
                 "SELECT is_verified FROM users WHERE user_id = $1", user_id
             )
             return result if result is not None else False
+
+    async def set_verified(self, user_id: int, status: bool = True):
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE users SET is_verified = $1 WHERE user_id = $2",
+                status, user_id
+            )
 
     async def save_message(self, user_id: int, role: str, content: str, image_url: str = None):
         async with self.pool.acquire() as conn:

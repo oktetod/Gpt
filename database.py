@@ -1,5 +1,5 @@
 import asyncpg
-from typing import List, Dict
+from typing import List, Dict, Optional
 from config import MAX_HISTORY
 
 class Database:
@@ -10,15 +10,24 @@ class Database:
     async def connect(self):
         """Membuat koneksi pool ke database."""
         if not self.pool:
-            self.pool = await asyncpg.create_pool(
-                self.url,
-                min_size=5,
-                max_size=20,
-                command_timeout=60
-            )
-            await self.init_tables()
-            print("Koneksi database berhasil dibuat.")
-    
+            try:
+                self.pool = await asyncpg.create_pool(
+                    self.url,
+                    min_size=5,
+                    max_size=20,
+                    command_timeout=60
+                )
+                await self.init_tables()
+                print("Koneksi database berhasil dibuat.")
+            except Exception as e:
+                raise ConnectionError(f"Gagal terhubung ke database: {e}")
+
+    async def close(self):
+        """Menutup koneksi pool."""
+        if self.pool:
+            await self.pool.close()
+            print("Koneksi database ditutup.")
+
     async def init_tables(self):
         """Membuat tabel jika belum ada."""
         async with self.pool.acquire() as conn:
@@ -61,8 +70,8 @@ class Database:
                 )
             else:
                 await conn.execute(
-                    'UPDATE users SET last_active = NOW() WHERE user_id = $1',
-                    user_id
+                    'UPDATE users SET last_active = NOW(), username = $1, first_name = $2 WHERE user_id = $3',
+                    username, first_name, user_id
                 )
             
             return await conn.fetchrow('SELECT * FROM users WHERE user_id = $1', user_id)
@@ -92,6 +101,7 @@ class Database:
             )
             
             # Membatasi jumlah riwayat agar database tidak membengkak
+            # Hapus pesan yang melebihi batas sejarah (berdasarkan waktu)
             await conn.execute('''
                 DELETE FROM chat_history
                 WHERE id IN (
@@ -101,16 +111,16 @@ class Database:
                     OFFSET $2
                 )
             ''', user_id, MAX_HISTORY * 2) # *2 untuk user dan asisten
-    
+
     async def get_history(self, user_id: int) -> List[Dict]:
         """Mengambil riwayat percakapan pengguna."""
         async with self.pool.acquire() as conn:
             rows = await conn.fetch(
-                'SELECT role, content, image_url FROM chat_history WHERE user_id = $1 ORDER BY created_at DESC LIMIT $2',
+                'SELECT role, content, image_url FROM chat_history WHERE user_id = $1 ORDER BY created_at ASC LIMIT $2',
                 user_id, MAX_HISTORY * 2
             )
             # Mengembalikan dalam urutan yang benar (paling lama ke paling baru)
-            return [dict(row) for row in reversed(rows)]
+            return [dict(row) for row in rows]
     
     async def clear_history(self, user_id: int):
         """Menghapus seluruh riwayat percakapan pengguna."""

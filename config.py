@@ -1,5 +1,5 @@
 import asyncpg
-from typing import List, Dict
+from typing import List, Dict, Optional
 from config import MAX_HISTORY
 
 
@@ -33,21 +33,29 @@ class Database:
         """Mendapatkan atau membuat pengguna baru di database."""
         async with self.pool.acquire() as conn:
             # Cek apakah pengguna sudah ada
-            query = """
-                SELECT id, username, first_name, last_name, is_verified, created_at, updated_at
+            query = '''
+                SELECT id, user_id, username, first_name, last_name, is_verified, created_at, updated_at
                 FROM users WHERE user_id = $1
-            """
+            '''
             row = await conn.fetchrow(query, user_id)
             
             if row:
+                # Update data pengguna jika ada perubahan
+                await conn.execute(
+                    '''
+                    UPDATE users SET username = $2, first_name = $3, last_name = $4, updated_at = NOW()
+                    WHERE user_id = $1
+                    ''',
+                    user_id, username, first_name, last_name
+                )
                 return dict(row)
             
             # Jika tidak ada, buat pengguna baru
-            insert_query = """
+            insert_query = '''
                 INSERT INTO users (user_id, username, first_name, last_name, is_verified)
                 VALUES ($1, $2, $3, $4, false)
                 RETURNING id, user_id, username, first_name, last_name, is_verified, created_at, updated_at
-            """
+            '''
             new_user = await conn.fetchrow(
                 insert_query,
                 user_id,
@@ -80,10 +88,10 @@ class Database:
         async with self.pool.acquire() as conn:
             # Simpan pesan
             await conn.execute(
-                """
+                '''
                 INSERT INTO messages (user_id, role, content, model, created_at)
                 VALUES ($1, $2, $3, $4, NOW())
-                """,
+                ''',
                 user_id, role, content, model
             )
 
@@ -96,7 +104,7 @@ class Database:
             if count > MAX_HISTORY:
                 to_delete = count - MAX_HISTORY
                 await conn.execute(
-                    """
+                    '''
                     DELETE FROM messages
                     WHERE id IN (
                         SELECT id FROM messages
@@ -104,7 +112,7 @@ class Database:
                         ORDER BY created_at ASC
                         LIMIT $2
                     )
-                    """,
+                    ''',
                     user_id, to_delete
                 )
 

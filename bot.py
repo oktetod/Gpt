@@ -317,7 +317,6 @@ async def handle_chat(event):
 
             elif intent['type'] == 'image_transform':
                 # Transformasi gambar
-                # Fitur ini memerlukan integrasi tambahan
                 await event.reply("🖼️ Transformasi gambar sedang dalam pengembangan.")
 
             else:

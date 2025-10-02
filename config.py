@@ -1,11 +1,20 @@
+# 📄 config.py v2
+
 import os
 from typing import List, Dict, Optional
 
 # ================== KONFIGURASI ENV ==================
-API_ID = int(os.getenv('TELEGRAM_API_ID'))
+try:
+    API_ID = int(os.getenv('TELEGRAM_API_ID'))
+except (TypeError, ValueError):
+    raise ValueError("TELEGRAM_API_ID harus berupa angka")
+
 API_HASH = os.getenv('TELEGRAM_API_HASH')
 BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
-DATABASE_URL = os.getenv('DATABASE_URL', "postgresql://postgres.kzmeyjdceukikzazbjjy:gilpad008@aws-1-ap-southeast-1.pooler.supabase.com:6543/postgres")
+DATABASE_URL = os.getenv('DATABASE_URL')
+if not DATABASE_URL:
+    DATABASE_URL = "postgresql://postgres.kzmeyjdceukikzazbjjy:gilpad008@aws-1-ap-southeast-1.pooler.supabase.com:6543/postgres"
+
 CEREBRAS_API_KEY = os.getenv("CEREBRAS_API_KEY")
 
 # ================== CHANNEL & GRUP WAJIB ==================
@@ -23,16 +32,12 @@ TEXT_MODELS: Dict[str, str] = {
     "mistral": "mistral"
 }
 
-# Daftar model teks yang didukung
 SUPPORTED_TEXT_MODELS: List[str] = list(TEXT_MODELS.keys())
 
-# Daftar model gambar yang didukung
-image_models: List[str] = [
-    "dall-e-3",
-    "dall-e-2"
+IMAGE_MODELS: List[str] = [
+    "dall-e-3", "dall-e-2", "flux", "flux-realism", "flux-anime", "flux-3d", "any-dark", "turbo"
 ]
 
-# Daftar suara untuk TTS (audio)
 AUDIO_VOICES: List[str] = [
     'alloy', 'echo', 'fable', 'onyx', 'nova', 'shimmer'
 ]
@@ -50,11 +55,11 @@ VALID_ROLES: List[str] = ["user", "assistant", "system"]
 BOT_API_URL: str = "https://api.telegram.org/bot"
 
 # ================== KEAMANAN & ADMIN ==================
-DEBUG: bool = False
+DEBUG: bool = os.getenv("DEBUG", "False").lower() == "true"
 ADMIN_IDS: List[int] = []
-OPENAI_API_KEY: Optional[str] = None
+OPENAI_API_KEY: Optional[str] = os.getenv("OPENAI_API_KEY")
 
-default_model: str = "gpt-oss"
+DEFAULT_MODEL: str = "gpt-oss"
 
 # ================== PROVIDER AI ==================
 AI_PROVIDERS: Dict[str, str] = {

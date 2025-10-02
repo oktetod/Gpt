@@ -1,3 +1,5 @@
+# 📄 database.py v2 (versi lengkap dan benar)
+
 import asyncpg
 from typing import List, Dict, Optional
 from config import MAX_HISTORY
@@ -17,10 +19,10 @@ class Database:
                     min_size=5,
                     max_size=20,
                     command_timeout=60,
-                    statement_cache_size=0  # Fix untuk kompatibilitas Supabase/PGBouncer
+                    statement_cache_size=0  # Kompatibel dengan Supabase/PGBouncer
                 )
                 await self.init_tables()
-                print("Koneksi database berhasil dibuat.")
+                print("✅ Koneksi database berhasil dibuat.")
             except Exception as e:
                 raise ConnectionError(f"Gagal terhubung ke database: {e}")
 
@@ -28,7 +30,7 @@ class Database:
         """Menutup koneksi pool."""
         if self.pool:
             await self.pool.close()
-            print("Koneksi database ditutup.")
+            print("🔒 Koneksi database ditutup.")
 
     async def init_tables(self):
         """Membuat tabel jika belum ada."""
@@ -59,6 +61,7 @@ class Database:
                 CREATE INDEX IF NOT EXISTS idx_chat_history_user 
                 ON chat_history(user_id, created_at DESC)
             ''')
+            print("📊 Tabel database siap digunakan.")
     
     async def get_or_create_user(self, user_id: int, username: str = None, first_name: str = None):
         """Mendapatkan atau membuat pengguna baru dan memperbarui waktu aktif."""
@@ -67,63 +70,60 @@ class Database:
             
             if not user:
                 await conn.execute(
-                    'INSERT INTO users (user_id, username, first_name) VALUES ($1, $2, $3)',
-                    user_id, username, first_name
+                    '''
+                    INSERT INTO users (user_id, username, first_name, is_verified)
+                    VALUES ($1, $2, $3, FALSE)
+                    ''',
+                    user_id, username, first_field
                 )
+                print(f"🆕 User {user_id} dibuat baru.")
+                return {
+                    'user_id': user_id,
+                    'username': username,
+                    'first_name': first_name,
+                    'is_verified': False,
+                    'created_at': None,
+                    'last_active': None
+                }
             else:
                 await conn.execute(
-                    'UPDATE users SET last_active = NOW(), username = $1, first_name = $2 WHERE user_id = $3',
+                    '''
+                    UPDATE users 
+                    SET username = $1, first_name = $2, last_active = NOW() 
+                    WHERE user_id = $3
+                    ''',
                     username, first_name, user_id
                 )
-            
-            return await conn.fetchrow('SELECT * FROM users WHERE user_id = $1', user_id)
-    
-    async def set_verified(self, user_id: int, verified: bool = True):
-        """Mengatur status verifikasi pengguna."""
+                print(f"🔄 User {user_id} diperbarui.")
+                return dict(user)
+
+    async def save_message(self, user_id: int, role: str, content: str, image_url: str = None):
+        """Simpan pesan ke riwayat obrolan."""
         async with self.pool.acquire() as conn:
             await conn.execute(
-                'UPDATE users SET is_verified = $1 WHERE user_id = $2',
-                verified, user_id
-            )
-    
-    async def is_verified(self, user_id: int) -> bool:
-        """Memeriksa apakah pengguna sudah terverifikasi."""
-        async with self.pool.acquire() as conn:
-            result = await conn.fetchval(
-                'SELECT is_verified FROM users WHERE user_id = $1', user_id
-            )
-            return result or False
-    
-    async def add_message(self, user_id: int, role: str, content: str, image_url: str = None):
-        """Menambahkan pesan ke riwayat percakapan dan membatasi jumlahnya."""
-        async with self.pool.acquire() as conn:
-            await conn.execute(
-                'INSERT INTO chat_history (user_id, role, content, image_url) VALUES ($1, $2, $3, $4)',
+                '''
+                INSERT INTO chat_history (user_id, role, content, image_url)
+                VALUES ($1, $2, $3, $4)
+                ''',
                 user_id, role, content, image_url
             )
-            
-            # Batasi riwayat agar tidak membengkak
-            # Hapus pesan lama jika melebihi batas (berdasarkan urutan waktu)
-            await conn.execute('''
-                DELETE FROM chat_history
-                WHERE id IN (
-                    SELECT id FROM chat_history
-                    WHERE user_id = $1
-                    ORDER BY created_at DESC
-                    OFFSET $2
-                )
-            ''', user_id, MAX_HISTORY * 2) # *2 karena pasangan user-assistant
 
-    async def get_history(self, user_id: int) -> List[Dict]:
-        """Mengambil riwayat percakapan pengguna."""
+    async def get_chat_history(self, user_id: int, limit: int = MAX_HISTORY) -> List[Dict]:
+        """Ambil riwayat obrolan terakhir untuk pengguna."""
         async with self.pool.acquire() as conn:
             rows = await conn.fetch(
-                'SELECT role, content, image_url FROM chat_history WHERE user_id = $1 ORDER BY created_at ASC LIMIT $2',
-                user_id, MAX_HISTORY * 2
+                '''
+                SELECT role, content, image_url, created_at 
+                FROM chat_history 
+                WHERE user_id = $1 
+                ORDER BY created_at DESC 
+                LIMIT $2
+                ''',
+                user_id, limit
             )
             return [dict(row) for row in rows]
-    
+
     async def clear_history(self, user_id: int):
-        """Menghapus seluruh riwayat percakapan pengguna."""
+        """Hapus riwayat obrolan pengguna."""
         async with self.pool.acquire() as conn:
             await conn.execute('DELETE FROM chat_history WHERE user_id = $1', user_id)

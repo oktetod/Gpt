@@ -1,0 +1,20 @@
+# Core Telegram Bot
+telethon==1.36.0
+cryptg==0.4.0
+
+# Database
+asyncpg==0.29.0
+
+# HTTP Client
+httpx==0.27.0
+
+# AI Providers
+cerebras-cloud-sdk>=1.0.0
+openai>=1.12.0
+
+# Environment Variables
+python-dotenv==1.0.0
+
+# Optional: HTML Parsing for better web scraping
+beautifulsoup4==4.12.3
+lxml==5.1.0

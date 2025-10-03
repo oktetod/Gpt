@@ -11,6 +11,7 @@ from typing import Dict, List, Optional
 from urllib.parse import quote
 from openai import OpenAI
 from cerebras.cloud.sdk import Cerebras
+import logging
 
 from config import (
     AI_CHAIN, IMAGE_MODELS, DEFAULT_IMAGE_MODEL,
@@ -21,6 +22,7 @@ from config import (
 )
 from web_search import MultiSearchEngine
 
+logger = logging.getLogger(__name__)
 
 class MultiProviderAI:
     """Enhanced Multi-provider AI engine with Web Search, RAG & Vision support"""
@@ -272,7 +274,7 @@ class MultiProviderAI:
             raise Exception(f"NVIDIA API error: {str(e)}")
     
     # ================== NVIDIA VISION (Nemotron Multi-modal) ==================
-    
+
     async def analyze_image_with_nemotron(
         self, 
         image_data: bytes, 
@@ -323,18 +325,24 @@ class MultiProviderAI:
                 headers=headers,
                 json=payload
             )
+
+            # FIX: Added detailed error logging to capture the response from NVIDIA on failure.
+            if response.status_code != 200:
+                logger.error(f"NVIDIA Vision API Error: {response.status_code}")
+                logger.error(f"Response Body: {response.text}")
+
             response.raise_for_status()
             
             result = response.json()
             return result["choices"][0]["message"]["content"]
         
         except Exception as e:
+            logger.warning(f"Vision analysis failed: {e}. Falling back to OCR.")
             # Fallback to OCR if vision fails
             try:
                 return await self.extract_text_from_image(image_data)
-            except:
-                raise Exception(f"Vision analysis failed: {str(e)}")
-    
+            except Exception as ocr_e:
+                raise Exception(f"Vision analysis failed, and OCR fallback also failed: {ocr_e}")
     # ================== NVIDIA OCR ==================
     
     async def extract_text_from_image(self, image_data: bytes) -> str:

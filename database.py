@@ -48,7 +48,7 @@ class Database:
     async def _init_tables(self) -> None:
         """Create required tables if they don't exist"""
         async with self.pool.acquire() as conn:
-            # Users table with all columns
+            # FIX: Added all required columns to the users table to prevent UndefinedColumnError
             await conn.execute('''
                 CREATE TABLE IF NOT EXISTS users (
                     user_id BIGINT PRIMARY KEY,
@@ -157,11 +157,11 @@ class Database:
                 logger.info(f"🆕 Created new user {user_id}")
                 
                 # Return the newly created user
-                user = await conn.fetchrow(
+                new_user = await conn.fetchrow(
                     'SELECT * FROM users WHERE user_id = $1',
                     user_id
                 )
-                return dict(user)
+                return dict(new_user)
     
     async def save_message(
         self,

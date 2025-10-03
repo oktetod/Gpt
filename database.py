@@ -1,6 +1,6 @@
 """
-Smart AI Telegram Bot - Database Layer v3.1
-Production-ready database with web search tracking
+Smart AI Telegram Bot - Database Layer v3.1 (FIXED for Supabase Pooler)
+Production-ready database with pgBouncer compatibility
 """
 
 import asyncpg
@@ -13,26 +13,28 @@ logger = logging.getLogger(__name__)
 
 
 class Database:
-    """PostgreSQL database handler with connection pooling"""
+    """PostgreSQL database handler with pgBouncer support"""
     
     def __init__(self, url: str):
         self.url = url
         self.pool: Optional[asyncpg.Pool] = None
     
     async def connect(self) -> None:
-        """Initialize database connection pool"""
+        """Initialize database connection pool with pgBouncer compatibility"""
         try:
+            # CRITICAL FIX: Disable statement cache for pgBouncer
             self.pool = await asyncpg.create_pool(
                 self.url,
                 min_size=2,
                 max_size=10,
                 command_timeout=60,
+                statement_cache_size=0,  # ← FIX: Disable prepared statements
                 server_settings={
                     'application_name': 'smart_ai_bot'
                 }
             )
             await self._init_tables()
-            logger.info("✅ Database connected successfully")
+            logger.info("✅ Database connected successfully (pgBouncer compatible)")
         except Exception as e:
             logger.error(f"❌ Database connection failed: {e}")
             raise ConnectionError(f"Failed to connect to database: {e}")
@@ -56,22 +58,12 @@ class Database:
                     language_code TEXT DEFAULT 'id',
                     is_premium BOOLEAN DEFAULT FALSE,
                     is_verified BOOLEAN DEFAULT FALSE,
+                    message_count INTEGER DEFAULT 0,
+                    image_count INTEGER DEFAULT 0,
                     created_at TIMESTAMPTZ DEFAULT NOW(),
                     last_active TIMESTAMPTZ DEFAULT NOW()
                 )
             ''')
-            
-            # Add columns if not exist (migration safe)
-            migrations = [
-                "ALTER TABLE users ADD COLUMN IF NOT EXISTS message_count INTEGER DEFAULT 0",
-                "ALTER TABLE users ADD COLUMN IF NOT EXISTS image_count INTEGER DEFAULT 0",
-            ]
-            
-            for migration in migrations:
-                try:
-                    await conn.execute(migration)
-                except Exception as e:
-                    logger.warning(f"Migration warning: {e}")
             
             # Chat history table with all columns
             await conn.execute('''
@@ -80,41 +72,13 @@ class Database:
                     user_id BIGINT NOT NULL,
                     role TEXT NOT NULL CHECK (role IN ('user', 'assistant', 'system')),
                     content TEXT NOT NULL,
+                    intent_type TEXT,
+                    model_used TEXT,
+                    tokens_used INTEGER DEFAULT 0,
+                    image_url TEXT,
                     created_at TIMESTAMPTZ DEFAULT NOW()
                 )
             ''')
-            
-            # Add foreign key if not exists
-            try:
-                await conn.execute('''
-                    DO $ 
-                    BEGIN
-                        IF NOT EXISTS (
-                            SELECT 1 FROM pg_constraint 
-                            WHERE conname = 'chat_history_user_id_fkey'
-                        ) THEN
-                            ALTER TABLE chat_history 
-                            ADD CONSTRAINT chat_history_user_id_fkey 
-                            FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE;
-                        END IF;
-                    END $;
-                ''')
-            except:
-                pass
-            
-            # Add additional chat_history columns
-            chat_migrations = [
-                "ALTER TABLE chat_history ADD COLUMN IF NOT EXISTS intent_type TEXT",
-                "ALTER TABLE chat_history ADD COLUMN IF NOT EXISTS model_used TEXT",
-                "ALTER TABLE chat_history ADD COLUMN IF NOT EXISTS tokens_used INTEGER DEFAULT 0",
-                "ALTER TABLE chat_history ADD COLUMN IF NOT EXISTS image_url TEXT",
-            ]
-            
-            for migration in chat_migrations:
-                try:
-                    await conn.execute(migration)
-                except Exception as e:
-                    logger.warning(f"Chat history migration warning: {e}")
             
             # User stats table
             await conn.execute('''
@@ -123,37 +87,11 @@ class Database:
                     total_messages INTEGER DEFAULT 0,
                     total_images INTEGER DEFAULT 0,
                     total_code_requests INTEGER DEFAULT 0,
+                    total_web_searches INTEGER DEFAULT 0,
                     total_tokens INTEGER DEFAULT 0,
                     last_reset TIMESTAMPTZ DEFAULT NOW()
                 )
             ''')
-            
-            # Add foreign key for user_stats
-            try:
-                await conn.execute('''
-                    DO $ 
-                    BEGIN
-                        IF NOT EXISTS (
-                            SELECT 1 FROM pg_constraint 
-                            WHERE conname = 'user_stats_user_id_fkey'
-                        ) THEN
-                            ALTER TABLE user_stats 
-                            ADD CONSTRAINT user_stats_user_id_fkey 
-                            FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE;
-                        END IF;
-                    END $;
-                ''')
-            except:
-                pass
-            
-            # Add web search column
-            try:
-                await conn.execute('''
-                    ALTER TABLE user_stats 
-                    ADD COLUMN IF NOT EXISTS total_web_searches INTEGER DEFAULT 0
-                ''')
-            except Exception as e:
-                logger.warning(f"Stats migration warning: {e}")
             
             # Create indices for performance
             await conn.execute('''
@@ -213,6 +151,7 @@ class Database:
                 await conn.execute('''
                     INSERT INTO user_stats (user_id)
                     VALUES ($1)
+                    ON CONFLICT (user_id) DO NOTHING
                 ''', user_id)
                 
                 logger.info(f"🆕 Created new user {user_id}")
@@ -247,6 +186,7 @@ class Database:
             
             # Update stats
             if role == 'user':
+                # Update total_messages and total_tokens
                 await conn.execute('''
                     UPDATE user_stats
                     SET total_messages = total_messages + 1,
@@ -254,6 +194,7 @@ class Database:
                     WHERE user_id = $2
                 ''', tokens_used, user_id)
                 
+                # Update specific counters based on intent
                 if intent_type == 'image':
                     await conn.execute('''
                         UPDATE user_stats
@@ -312,6 +253,14 @@ class Database:
             
             if stats:
                 return dict(stats)
+            
+            # Create stats if not exists
+            await conn.execute('''
+                INSERT INTO user_stats (user_id)
+                VALUES ($1)
+                ON CONFLICT (user_id) DO NOTHING
+            ''', user_id)
+            
             return {
                 'total_messages': 0,
                 'total_images': 0,
@@ -357,13 +306,16 @@ class Database:
     ) -> bool:
         """Check if user has exceeded rate limit"""
         async with self.pool.acquire() as conn:
-            count = await conn.fetchval('''
+            # Use simple query without prepared statements
+            query = f'''
                 SELECT COUNT(*)
                 FROM chat_history
                 WHERE user_id = $1
-                  AND created_at > NOW() - INTERVAL '%s minutes'
+                  AND created_at > NOW() - INTERVAL '{time_window_minutes} minutes'
                   AND ($2 = 'all' OR intent_type = $2)
-            ''' % time_window_minutes, user_id, limit_type)
+            '''
+            
+            count = await conn.fetchval(query, user_id, limit_type)
             
             return count < max_count
     

@@ -1,9 +1,7 @@
-# file: migrate_database.py
-
 #!/usr/bin/env python3
 """
-Database Migration Script v2
-Safely adds all missing columns and updates schema
+Database Migration Script v3 - COMPLETE SCHEMA FIX
+Safely adds ALL missing columns and creates missing tables
 """
 
 import asyncio
@@ -16,61 +14,67 @@ load_dotenv()
 DATABASE_URL = os.getenv('DATABASE_URL')
 
 async def migrate():
-    """Perform database migration"""
-    print("🔄 Starting database migration...")
+    """Perform complete database migration"""
+    print("🔄 Starting COMPLETE database migration...")
     conn = None
     try:
         conn = await asyncpg.connect(DATABASE_URL)
         print("✅ Connected to database")
         
-        # ===== USERS TABLE MIGRATION =====
-        print("\n📋 Migrating users table...")
-        columns_to_add = {
-            "last_name": "TEXT",
-            "message_count": "INTEGER DEFAULT 0",
-            "image_count": "INTEGER DEFAULT 0"
-        }
-        for col, data_type in columns_to_add.items():
-            try:
-                await conn.execute(f'ALTER TABLE users ADD COLUMN IF NOT EXISTS {col} {data_type}')
-                print(f"  ✅ Added '{col}' column to users table")
-            except Exception as e:
-                print(f"  ⚠️ Could not add column '{col}': {e}")
-
-        # ===== CHAT_HISTORY TABLE MIGRATION =====
-        print("\n📋 Migrating chat_history table...")
-        history_columns = {
-            "intent_type": "TEXT",
-            "model_used": "TEXT",
-            "tokens_used": "INTEGER DEFAULT 0",
-            "image_url": "TEXT"
-        }
-        for col, data_type in history_columns.items():
-            try:
-                await conn.execute(f'ALTER TABLE chat_history ADD COLUMN IF NOT EXISTS {col} {data_type}')
-                print(f"  ✅ Added '{col}' column to chat_history table")
-            except Exception as e:
-                print(f"  ⚠️ Could not add column '{col}': {e}")
+        # ===== DROP AND RECREATE ALL TABLES (CLEAN START) =====
+        print("\n🔧 Ensuring clean schema...")
         
-        # ===== USER_STATS TABLE MIGRATION =====
-        print("\n📋 Migrating user_stats table...")
-        try:
-            await conn.execute('ALTER TABLE user_stats ADD COLUMN IF NOT EXISTS total_web_searches INTEGER DEFAULT 0')
-            print("  ✅ Added 'total_web_searches' column to user_stats table")
-        except Exception as e:
-            print(f"  ⚠️ Could not add column 'total_web_searches': {e}")
-
-        print("\n✅ Migration completed successfully!")
-        return True
+        # Drop existing tables if they exist (cascade to handle foreign keys)
+        print("  🗑️ Dropping old tables...")
+        await conn.execute('DROP TABLE IF EXISTS chat_history CASCADE')
+        await conn.execute('DROP TABLE IF EXISTS user_stats CASCADE')
+        await conn.execute('DROP TABLE IF EXISTS users CASCADE')
+        print("  ✅ Old tables dropped")
         
-    except Exception as e:
-        print(f"\n❌ Migration failed: {e}")
-        return False
-    finally:
-        if conn:
-            await conn.close()
-            print("\n🔒 Database connection closed")
-
-if __name__ == '__main__':
-    success = asyncio.run(migrate())
-    exit(0 if success else 1)
+        # ===== CREATE USERS TABLE =====
+        print("\n📋 Creating users table...")
+        await conn.execute('''
+            CREATE TABLE users (
+                user_id BIGINT PRIMARY KEY,
+                username TEXT,
+                first_name TEXT,
+                last_name TEXT,
+                language_code TEXT DEFAULT 'id',
+                is_premium BOOLEAN DEFAULT FALSE,
+                is_verified BOOLEAN DEFAULT FALSE,
+                message_count INTEGER DEFAULT 0,
+                image_count INTEGER DEFAULT 0,
+                created_at TIMESTAMPTZ DEFAULT NOW(),
+                last_active TIMESTAMPTZ DEFAULT NOW()
+            )
+        ''')
+        print("  ✅ Users table created with ALL columns")
+        
+        # ===== CREATE CHAT_HISTORY TABLE =====
+        print("\n📋 Creating chat_history table...")
+        await conn.execute('''
+            CREATE TABLE chat_history (
+                id BIGSERIAL PRIMARY KEY,
+                user_id BIGINT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+                role TEXT NOT NULL CHECK (role IN ('user', 'assistant', 'system')),
+                content TEXT NOT NULL,
+                intent_type TEXT,
+                model_used TEXT,
+                tokens_used INTEGER DEFAULT 0,
+                image_url TEXT,
+                created_at TIMESTAMPTZ DEFAULT NOW()
+            )
+        ''')
+        print("  ✅ Chat_history table created with ALL columns and foreign key")
+        
+        # ===== CREATE USER_STATS TABLE =====
+        print("\n📋 Creating user_stats table...")
+        await conn.execute('''
+            CREATE TABLE user_stats (
+                user_id BIGINT PRIMARY KEY REFERENCES users(user_id) ON DELETE CASCADE,
+                total_messages INTEGER DEFAULT 0,
+                total_images INTEGER DEFAULT 0,
+                total_code_requests INTEGER DEFAULT 0,
+                total_web_searches INTEGER DEFAULT 0,
+                total_tokens INTEGER DEFAULT 0,
+                last_reset TIMESTAMPTZ DEFAULT NOW()

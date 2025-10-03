@@ -48,8 +48,10 @@ class Database:
     async def _init_tables(self) -> None:
         """Create required tables if they don't exist"""
         async with self.pool.acquire() as conn:
-            # Use fetchval instead of execute
-            await conn.fetchval('''
+            # Execute each statement separately for pgBouncer compatibility
+            
+            # Create users table
+            await conn.execute('''
                 CREATE TABLE IF NOT EXISTS users (
                     user_id BIGINT PRIMARY KEY,
                     username TEXT,
@@ -62,11 +64,11 @@ class Database:
                     image_count INTEGER DEFAULT 0,
                     created_at TIMESTAMPTZ DEFAULT NOW(),
                     last_active TIMESTAMPTZ DEFAULT NOW()
-                );
-                SELECT 1;
+                )
             ''')
             
-            await conn.fetchval('''
+            # Create chat_history table
+            await conn.execute('''
                 CREATE TABLE IF NOT EXISTS chat_history (
                     id BIGSERIAL PRIMARY KEY,
                     user_id BIGINT NOT NULL,
@@ -77,11 +79,11 @@ class Database:
                     tokens_used INTEGER DEFAULT 0,
                     image_url TEXT,
                     created_at TIMESTAMPTZ DEFAULT NOW()
-                );
-                SELECT 1;
+                )
             ''')
             
-            await conn.fetchval('''
+            # Create user_stats table
+            await conn.execute('''
                 CREATE TABLE IF NOT EXISTS user_stats (
                     user_id BIGINT PRIMARY KEY,
                     total_messages INTEGER DEFAULT 0,
@@ -90,21 +92,18 @@ class Database:
                     total_web_searches INTEGER DEFAULT 0,
                     total_tokens INTEGER DEFAULT 0,
                     last_reset TIMESTAMPTZ DEFAULT NOW()
-                );
-                SELECT 1;
+                )
             ''')
             
-            # Create indices
-            await conn.fetchval('''
+            # Create indices (one at a time)
+            await conn.execute('''
                 CREATE INDEX IF NOT EXISTS idx_chat_history_user_time 
-                ON chat_history(user_id, created_at DESC);
-                SELECT 1;
+                ON chat_history(user_id, created_at DESC)
             ''')
             
-            await conn.fetchval('''
+            await conn.execute('''
                 CREATE INDEX IF NOT EXISTS idx_users_last_active 
-                ON users(last_active DESC);
-                SELECT 1;
+                ON users(last_active DESC)
             ''')
             
             logger.info("📊 Database tables initialized")

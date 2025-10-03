@@ -1,6 +1,6 @@
 """
-Smart AI Telegram Bot - Database Layer v3.1 (FIXED for Supabase Pooler)
-Production-ready database with pgBouncer compatibility
+Smart AI Telegram Bot - Database Layer v3.2 (COMPLETE pgBouncer Fix)
+Fixed: Use fetch/fetchrow/fetchval instead of execute for all queries
 """
 
 import asyncpg
@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 
 class Database:
-    """PostgreSQL database handler with pgBouncer support"""
+    """PostgreSQL database handler with FULL pgBouncer compatibility"""
     
     def __init__(self, url: str):
         self.url = url
@@ -22,19 +22,19 @@ class Database:
     async def connect(self) -> None:
         """Initialize database connection pool with pgBouncer compatibility"""
         try:
-            # CRITICAL FIX: Disable statement cache for pgBouncer
+            # CRITICAL: Disable statement cache for pgBouncer
             self.pool = await asyncpg.create_pool(
                 self.url,
                 min_size=2,
                 max_size=10,
                 command_timeout=60,
-                statement_cache_size=0,  # ← FIX: Disable prepared statements
+                statement_cache_size=0,  # Disable prepared statements
                 server_settings={
                     'application_name': 'smart_ai_bot'
                 }
             )
             await self._init_tables()
-            logger.info("✅ Database connected successfully (pgBouncer compatible)")
+            logger.info("✅ Database connected (pgBouncer compatible)")
         except Exception as e:
             logger.error(f"❌ Database connection failed: {e}")
             raise ConnectionError(f"Failed to connect to database: {e}")
@@ -48,8 +48,8 @@ class Database:
     async def _init_tables(self) -> None:
         """Create required tables if they don't exist"""
         async with self.pool.acquire() as conn:
-            # FIX: Added all required columns to the users table to prevent UndefinedColumnError
-            await conn.execute('''
+            # Use fetchval instead of execute
+            await conn.fetchval('''
                 CREATE TABLE IF NOT EXISTS users (
                     user_id BIGINT PRIMARY KEY,
                     username TEXT,
@@ -62,11 +62,11 @@ class Database:
                     image_count INTEGER DEFAULT 0,
                     created_at TIMESTAMPTZ DEFAULT NOW(),
                     last_active TIMESTAMPTZ DEFAULT NOW()
-                )
+                );
+                SELECT 1;
             ''')
             
-            # Chat history table with all columns
-            await conn.execute('''
+            await conn.fetchval('''
                 CREATE TABLE IF NOT EXISTS chat_history (
                     id BIGSERIAL PRIMARY KEY,
                     user_id BIGINT NOT NULL,
@@ -77,11 +77,11 @@ class Database:
                     tokens_used INTEGER DEFAULT 0,
                     image_url TEXT,
                     created_at TIMESTAMPTZ DEFAULT NOW()
-                )
+                );
+                SELECT 1;
             ''')
             
-            # User stats table
-            await conn.execute('''
+            await conn.fetchval('''
                 CREATE TABLE IF NOT EXISTS user_stats (
                     user_id BIGINT PRIMARY KEY,
                     total_messages INTEGER DEFAULT 0,
@@ -90,18 +90,21 @@ class Database:
                     total_web_searches INTEGER DEFAULT 0,
                     total_tokens INTEGER DEFAULT 0,
                     last_reset TIMESTAMPTZ DEFAULT NOW()
-                )
+                );
+                SELECT 1;
             ''')
             
-            # Create indices for performance
-            await conn.execute('''
+            # Create indices
+            await conn.fetchval('''
                 CREATE INDEX IF NOT EXISTS idx_chat_history_user_time 
-                ON chat_history(user_id, created_at DESC)
+                ON chat_history(user_id, created_at DESC);
+                SELECT 1;
             ''')
             
-            await conn.execute('''
+            await conn.fetchval('''
                 CREATE INDEX IF NOT EXISTS idx_users_last_active 
-                ON users(last_active DESC)
+                ON users(last_active DESC);
+                SELECT 1;
             ''')
             
             logger.info("📊 Database tables initialized")
@@ -123,8 +126,8 @@ class Database:
             )
             
             if user:
-                # Update last active and user info
-                await conn.execute('''
+                # Update using fetchval instead of execute
+                await conn.fetchval('''
                     UPDATE users 
                     SET username = $1,
                         first_name = $2,
@@ -133,25 +136,28 @@ class Database:
                         last_active = NOW(),
                         message_count = message_count + 1
                     WHERE user_id = $5
+                    RETURNING user_id
                 ''', username, first_name, last_name, language_code, user_id)
                 
                 logger.info(f"🔄 Updated user {user_id}")
                 return dict(user)
             else:
-                # Create new user
-                await conn.execute('''
+                # Create new user using fetchval
+                await conn.fetchval('''
                     INSERT INTO users (
                         user_id, username, first_name, last_name, 
                         language_code, is_verified
                     )
                     VALUES ($1, $2, $3, $4, $5, FALSE)
+                    RETURNING user_id
                 ''', user_id, username, first_name, last_name, language_code)
                 
                 # Create stats entry
-                await conn.execute('''
+                await conn.fetchval('''
                     INSERT INTO user_stats (user_id)
                     VALUES ($1)
                     ON CONFLICT (user_id) DO NOTHING
+                    RETURNING user_id
                 ''', user_id)
                 
                 logger.info(f"🆕 Created new user {user_id}")
@@ -175,43 +181,48 @@ class Database:
     ) -> None:
         """Save message to chat history"""
         async with self.pool.acquire() as conn:
-            await conn.execute('''
+            # Use fetchval instead of execute
+            await conn.fetchval('''
                 INSERT INTO chat_history (
                     user_id, role, content, intent_type, 
                     model_used, tokens_used, image_url
                 )
                 VALUES ($1, $2, $3, $4, $5, $6, $7)
+                RETURNING id
             ''', user_id, role, content, intent_type, 
                 model_used, tokens_used, image_url)
             
             # Update stats
             if role == 'user':
-                # Update total_messages and total_tokens
-                await conn.execute('''
+                await conn.fetchval('''
                     UPDATE user_stats
                     SET total_messages = total_messages + 1,
                         total_tokens = total_tokens + $1
                     WHERE user_id = $2
+                    RETURNING user_id
                 ''', tokens_used, user_id)
                 
-                # Update specific counters based on intent
+                # Update specific counters
                 if intent_type == 'image':
-                    await conn.execute('''
+                    await conn.fetchval('''
                         UPDATE user_stats
                         SET total_images = total_images + 1
                         WHERE user_id = $1
+                        RETURNING user_id
                     ''', user_id)
                 elif intent_type == 'code':
-                    await conn.execute('''
+                    await conn.fetchval('''
                         UPDATE user_stats
                         SET total_code_requests = total_code_requests + 1
                         WHERE user_id = $1
+                        RETURNING user_id
                     ''', user_id)
                 elif intent_type == 'web_search':
-                    await conn.execute('''
+                    await conn.fetchval('''
                         UPDATE user_stats
                         SET total_web_searches = total_web_searches + 1
                         WHERE user_id = $1
+                        RETURNING user_id
                     ''', user_id)
     
     async def get_chat_history(
@@ -230,17 +241,23 @@ class Database:
                 LIMIT $2
             ''', user_id, limit)
             
-            # Return in chronological order
             return [dict(row) for row in reversed(rows)]
     
     async def clear_history(self, user_id: int) -> int:
         """Clear chat history for user"""
         async with self.pool.acquire() as conn:
-            result = await conn.execute(
-                'DELETE FROM chat_history WHERE user_id = $1',
+            # Use fetch to get count, then delete
+            count = await conn.fetchval(
+                'SELECT COUNT(*) FROM chat_history WHERE user_id = $1',
                 user_id
             )
-            deleted = int(result.split()[-1])
+            
+            await conn.fetchval(
+                'DELETE FROM chat_history WHERE user_id = $1 RETURNING user_id',
+                user_id
+            )
+            
+            deleted = int(count) if count else 0
             logger.info(f"🗑️ Cleared {deleted} messages for user {user_id}")
             return deleted
     
@@ -255,10 +272,11 @@ class Database:
                 return dict(stats)
             
             # Create stats if not exists
-            await conn.execute('''
+            await conn.fetchval('''
                 INSERT INTO user_stats (user_id)
                 VALUES ($1)
                 ON CONFLICT (user_id) DO NOTHING
+                RETURNING user_id
             ''', user_id)
             
             return {
@@ -276,10 +294,11 @@ class Database:
     ) -> None:
         """Update user verification status"""
         async with self.pool.acquire() as conn:
-            await conn.execute('''
+            await conn.fetchval('''
                 UPDATE users
                 SET is_verified = $1
                 WHERE user_id = $2
+                RETURNING user_id
             ''', is_verified, user_id)
             
             logger.info(f"✓ Updated verification for user {user_id}: {is_verified}")
@@ -306,16 +325,14 @@ class Database:
     ) -> bool:
         """Check if user has exceeded rate limit"""
         async with self.pool.acquire() as conn:
-            # Use simple query without prepared statements
-            query = f'''
+            # Use fetchval instead of execute with interval formatting
+            count = await conn.fetchval(f'''
                 SELECT COUNT(*)
                 FROM chat_history
                 WHERE user_id = $1
                   AND created_at > NOW() - INTERVAL '{time_window_minutes} minutes'
                   AND ($2 = 'all' OR intent_type = $2)
-            '''
-            
-            count = await conn.fetchval(query, user_id, limit_type)
+            ''', user_id, limit_type)
             
             return count < max_count
     

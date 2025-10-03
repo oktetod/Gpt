@@ -18,6 +18,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application code
 COPY . .
 
+# Make startup script executable
+RUN chmod +x startup.sh
+
 # Expose port for health checks
 EXPOSE 8080
 
@@ -27,7 +30,7 @@ ENV PORT=8080
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')"
+    CMD python -c "import os; exit(0 if os.path.exists('/app/bot_session.session') else 1)"
 
-# Run the bot
-CMD ["python", "-u", "bot.py"]
+# Run the bot with migration
+CMD ["./startup.sh"]
